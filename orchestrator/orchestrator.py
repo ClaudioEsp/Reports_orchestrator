@@ -3,7 +3,6 @@ import logging
 import signal
 import time
 import sys
-from datetime import datetime
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -37,15 +36,15 @@ def schedule_jobs(scheduler: BackgroundScheduler):
         module = job_cfg["module"]
         run_callable = load_job_callable(module)
 
+        # ---- schedule normally (interval or cron) ----
         if job_cfg.get("type") == "interval":
-            seconds = job_cfg["seconds"]
-            trigger = IntervalTrigger(seconds=seconds)
-            print(f"Scheduling interval job '{job_id}' every {seconds} seconds")
-
+            minutes = job_cfg["minutes"]
+            trigger = IntervalTrigger(minutes=minutes)
+            logger.info("Scheduling interval job '%s' every %s minutes", job_id, minutes)
         else:  # default: cron
             cron_expr = job_cfg["cron"]
             trigger = CronTrigger.from_crontab(cron_expr)
-            print(f"Scheduling cron job '{job_id}' with '{cron_expr}'")
+            logger.info("Scheduling cron job '%s' with '%s'", job_id, cron_expr)
 
         scheduler.add_job(
             func=run_callable,
@@ -54,6 +53,15 @@ def schedule_jobs(scheduler: BackgroundScheduler):
             max_instances=1,
             coalesce=True,
         )
+
+        # ---- optionally run once at startup ----
+        if job_cfg.get("run_at_startup"):
+            logger.info("Running job '%s' once at startup", job_id)
+            try:
+                run_callable()
+            except Exception:
+                logger.exception("Startup run of job '%s' failed", job_id)
+
 
 def main():
     scheduler = BackgroundScheduler(timezone="UTC")
@@ -65,14 +73,14 @@ def main():
 
     # Graceful shutdown on Ctrl+C / SIGTERM
     def shutdown(signum, frame):
-        logger.info(f"Received signal {signum}, shutting down scheduler...")
+        logger.info("Received signal %s, shutting down scheduler...", signum)
         scheduler.shutdown(wait=True)
         sys.exit(0)
 
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
-    # Keep main thread alive
+    # Keep main thread alive (Windows-friendly)
     try:
         while True:
             time.sleep(1)

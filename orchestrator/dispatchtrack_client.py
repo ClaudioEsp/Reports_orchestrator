@@ -43,7 +43,7 @@ class DispatchTrackClient:
         url = f"{self.base_url}/routes"
         params = {**params, "date": date}
 
-        resp = self.session.get(url, params=params, timeout=30)
+        resp = self.session.get(url, params=params, timeout=300)
 
         resp.raise_for_status()
         return resp.json()

@@ -40,7 +40,7 @@ def _normalize_date(date):
     return str(date)
 
 
-def run(date=None):
+def run(date=None, minified=True):
     """
     Fetch routes for a given date, save CSV snapshot,
     and upsert into MongoDB.
@@ -51,9 +51,9 @@ def run(date=None):
     date_str = _normalize_date(date)
 
     client = DispatchTrackClient()
-    print(f"[get_routes] Fetching routes from DispatchTrack for date {date_str}...")
+    print(f"[get_routes] Fetching routes from DispatchTrack for date {date_str} (minifield={minified})...")
 
-    routes_json = client.get_routes(date=date_str)
+    routes_json = client.get_routes(date=date_str, minified=minified)
 
     # structure: {"status": "...", "response": {"routes": [...]}}
     routes = (
