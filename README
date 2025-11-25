@@ -7,6 +7,16 @@ acceso a los datos de Paris a través de las variables de ambiente (API url y TO
 Este orquestador está conectado a una base de datos local construida sobre MongoDB para la gestión de la
 información.
 
+Para correr el orquestador:
+
+
+python -m pip install apscheduler pymongo python-dotenv fastapi uvicorn motor
+python -m pip install requests pandas pymongo python-dotenv
+
+
+venv\Scripts\activate
+python orchestrator\orchestrator.py
+
 
 
 

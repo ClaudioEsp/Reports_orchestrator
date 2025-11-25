@@ -10,6 +10,21 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from config import JOBS
 
+
+import os
+from pymongo import MongoClient
+
+MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
+
+# DispatchTrack DB
+DISPATCHTRACK_DB = os.getenv("DISPATCHTRACK_DB", "dispatchtrack_db")
+ROUTES_COLLECTION = os.getenv("ROUTES_COLLECTION", "routes")
+
+# CT DB
+CT_DATABASE = os.getenv("CT_DATABASE", "CT_DATABASE")
+CT_COLLECTION = os.getenv("CT_COLLECTION", "CT_COLLECTION")
+
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
@@ -30,11 +45,17 @@ def load_job_callable(module_path: str):
     return module.run
 
 
+# orchestrator.py
+
 def schedule_jobs(scheduler: BackgroundScheduler):
     for job_cfg in JOBS:
         job_id = job_cfg["id"]
         module = job_cfg["module"]
         run_callable = load_job_callable(module)
+
+        # NEW: optional args/kwargs for the job
+        args = job_cfg.get("args", [])
+        kwargs = job_cfg.get("kwargs", {})
 
         # ---- schedule normally (interval or cron) ----
         if job_cfg.get("type") == "interval":
@@ -52,15 +73,18 @@ def schedule_jobs(scheduler: BackgroundScheduler):
             id=job_id,
             max_instances=1,
             coalesce=True,
+            args=args,
+            kwargs=kwargs,
         )
 
         # ---- optionally run once at startup ----
         if job_cfg.get("run_at_startup"):
             logger.info("Running job '%s' once at startup", job_id)
             try:
-                run_callable()
+                run_callable(*args, **kwargs)
             except Exception:
                 logger.exception("Startup run of job '%s' failed", job_id)
+
 
 
 def main():

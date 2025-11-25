@@ -1,3 +1,5 @@
+# dispatchtrack_client.py
+
 import os
 import requests
 from dotenv import load_dotenv
@@ -6,7 +8,6 @@ load_dotenv()
 
 DISPATCHTRACK_BASE_URL = os.getenv("DISPATCHTRACK_BASE_URL")
 DISPATCHTRACK_TOKEN = os.getenv("DISPATCHTRACK_TOKEN")  # put your token in .env
-
 
 
 class DispatchTrackClient:
@@ -27,23 +28,31 @@ class DispatchTrackClient:
 
     def get_vehicles(self, **params):
         """
-        Calls https://paris.dispatchtrack.com/api/external/v1/trucks
+        Calls {base_url}/trucks
         """
         url = f"{self.base_url}/trucks"
         resp = self.session.get(url, params=params, timeout=30)
-
         resp.raise_for_status()
         return resp.json()
 
     def get_routes(self, date: str, **params):
         """
-        Calls /routes with a required date parameter (YYYY-MM-DD).
+        Calls {base_url}/routes with a required date parameter (YYYY-MM-DD).
         Example: GET /routes?date=2025-01-22
         """
         url = f"{self.base_url}/routes"
         params = {**params, "date": date}
 
         resp = self.session.get(url, params=params, timeout=300)
+        resp.raise_for_status()
+        return resp.json()
 
+    def get_route(self, route_id: str, **params):
+        """
+        Calls {base_url}/routes/:route_id
+        Example: GET /routes/123456
+        """
+        url = f"{self.base_url}/routes/{route_id}"
+        resp = self.session.get(url, params=params, timeout=300)
         resp.raise_for_status()
         return resp.json()

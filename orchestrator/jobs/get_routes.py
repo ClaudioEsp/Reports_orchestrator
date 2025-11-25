@@ -1,110 +1,116 @@
+# jobs/get_routes.py
+
 import os
-import datetime as dt
-import pandas as pd
-from pathlib import Path
+import logging
+from datetime import datetime
+from typing import Optional
 
-from pymongo import MongoClient
-from dispatchtrack_client import DispatchTrackClient
+from pymongo import MongoClient, UpdateOne
 
-# ---------- File / reports path (../data/raw, data is OUTSIDE the project) ----------
-# PROJECT_DIR = .../PROYECTO_REPORTES
-PROJECT_DIR = Path(__file__).resolve().parents[2]
+from .dispatchtrack_client import fetch_routes_page, DispatchTrackAPIError
 
-# BASE_DIR = parent folder that contains both PROYECTO_REPORTES and data
-BASE_DIR = PROJECT_DIR.parent
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("job.get_routes")
 
-DATA_DIR = BASE_DIR / "data" / "raw"
-DATA_DIR.mkdir(parents=True, exist_ok=True)
-
-# ---------- Mongo configuration ----------
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
-MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "dispatchtrack")
-MONGO_ROUTES_COLLECTION_NAME = os.getenv("MONGO_ROUTES_COLLECTION_NAME", "routes")
+DB_NAME = "dispatchtrack"
+ROUTES_COLLECTION = "routes"
 
 
-def _get_routes_collection():
+from typing import Optional
+
+def _extract_route_key(route: dict) -> Optional[str]:
+    """
+    Try to extract a unique identifier for the route.
+
+    We only accept real values, not None. Prefer number/route_number,
+    then fall back to id.
+    """
+    for field in ("number", "route_number", "id"):
+        value = route.get(field)
+        if value is not None:
+            return str(value)
+
+    return None
+
+
+def run(date_str: str) -> None:
+    """
+    Fetch *all* routes for the given date from DispatchTrack
+    and upsert into Mongo dispatchtrack.routes.
+
+    - Uses pagination (page=1..N) until API returns no routes.
+    - Adds metadata fields: date, ingested_at, last_refreshed_at.
+    """
+    logger.info("Starting get_routes for date=%s", date_str)
+
     client = MongoClient(MONGO_URI)
-    db = client[MONGO_DB_NAME]
-    collection = db[MONGO_ROUTES_COLLECTION_NAME]
-    collection.create_index("id", unique=True)  # route id
-    return collection
+    db = client[DB_NAME]
+    routes_col = db[ROUTES_COLLECTION]
+
+    page = 1
+    total_routes = 0
+    bulk_ops = []
+
+    while True:
+        try:
+            routes_page = fetch_routes_page(date_str, page)
+        except DispatchTrackAPIError:
+            # Bubble up after closing Mongo
+            client.close()
+            raise
+
+        if not routes_page:
+            logger.info("No more routes at page=%s", page)
+            break
+
+        logger.info("Fetched %d routes for page=%s", len(routes_page), page)
+
+        for route in routes_page:
+            key = _extract_route_key(route)
+            if not key:
+                logger.warning("Skipping route without key: %s", route)
+                continue
+
+            meta = {
+                "date": date_str,
+                "minified_raw": route,
+                "last_refreshed_at": datetime.utcnow(),
+            }
+
+            # Only set created_at on first insert
+            update = {
+                "$set": meta,
+                "$setOnInsert": {
+                    "created_at": datetime.utcnow(),
+                    "has_full_details": False,
+                },
+            }
+
+            bulk_ops.append(
+                UpdateOne(
+                    {"route_key": key},
+                    update,
+                    upsert=True,
+                )
+            )
+            total_routes += 1
+
+        if bulk_ops:
+            routes_col.bulk_write(bulk_ops, ordered=False)
+            bulk_ops = []
+
+        page += 1
+
+    client.close()
+    logger.info("Finished get_routes for %s. Upserted/updated ~%d routes.", date_str, total_routes)
 
 
-def _normalize_date(date):
-    """
-    Accepts:
-      - None -> use today's date
-      - datetime.date -> format
-      - 'YYYY-MM-DD' string -> just return it
-    """
-    if date is None:
-        return dt.date.today().strftime("%Y-%m-%d")
-    if isinstance(date, dt.date):
-        return date.strftime("%Y-%m-%d")
-    # assume it's already a string 'YYYY-MM-DD'
-    return str(date)
+if __name__ == "__main__":
+    import argparse
 
+    parser = argparse.ArgumentParser(description="Fetch routes for a day.")
+    parser.add_argument("--date", required=True, help="Date YYYY-MM-DD")
+    args = parser.parse_args()
 
-def run(date=None, minified=True):
-    """
-    Fetch routes for a given date, save CSV snapshot,
-    and upsert into MongoDB.
-
-    - If date is None -> uses today's date.
-    - You can call run("2025-01-22") to fetch another day.
-    """
-    date_str = _normalize_date(date)
-
-    client = DispatchTrackClient()
-    print(f"[get_routes] Fetching routes from DispatchTrack for date {date_str} (minified={minified})...")
-
-    routes_json = client.get_routes(date=date_str, minified=minified)
-
-    # structure: {"status": "...", "response": {"routes": [...]}}
-    routes = (
-        routes_json.get("response", {}).get("routes", [])
-        if isinstance(routes_json, dict)
-        else []
-    )
-
-    if not routes:
-        print(f"[get_routes] No routes returned from API for {date_str}.")
-        return
-
-    # ---------- CSV snapshot ----------
-    df = pd.json_normalize(routes, sep="__")
-    ts = dt.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    file_path = DATA_DIR / f"routes_{date_str}_{ts}.csv"
-    df.to_csv(file_path, index=False)
-    print(f"[get_routes] Saved CSV with {len(df)} routes to {file_path}")
-
-    # ---------- Mongo upsert ----------
-    collection = _get_routes_collection()
-    now = dt.datetime.utcnow()
-
-    new_count = 0
-    updated_count = 0
-
-    for route in routes:
-        route_id = route.get("id")
-        if route_id is None:
-            continue
-
-        route["last_seen_at"] = now
-        route["dispatch_date_param"] = date_str  # the date you queried with
-
-        result = collection.update_one(
-            {"id": route_id},         # match by route id
-            {"$set": route},          # update full route doc
-            upsert=True,
-        )
-
-        if result.upserted_id is not None:
-            new_count += 1
-        elif result.modified_count > 0:
-            updated_count += 1
-
-    print(
-        f"[get_routes] Upserted {len(routes)} routes for {date_str}. "
-        f"New: {new_count}, Updated: {updated_count}"
-    )
+    run(args.date)
