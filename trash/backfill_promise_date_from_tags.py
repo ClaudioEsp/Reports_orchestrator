@@ -2,7 +2,7 @@ import os
 import logging
 from pymongo import MongoClient
 
-logger = logging.getLogger("job.backfill_promise_date")
+logger = logging.getLogger("job.backfill_promise_date_from_tags")
 logger.setLevel(logging.INFO)
 
 # Mongo env
