@@ -4,7 +4,7 @@ from typing import List, Optional
 
 from pymongo import MongoClient
 
-logger = logging.getLogger("job.backfill_promise_date_from_tags")
+logger = logging.getLogger("job.backfill_compromise_date_from_tags")
 logger.setLevel(logging.INFO)
 logging.basicConfig(level=logging.INFO)
 
@@ -29,7 +29,7 @@ def extract_fecsoldes(tags: List[dict]) -> Optional[str]:
     return None
 
 
-def normalize_promise_date(raw: str) -> Optional[str]:
+def normalize_compromise_date(raw: str) -> Optional[str]:
     """
     Convert YYYYMMDD → YYYY-MM-DD.
     Return None if format invalid.
@@ -46,16 +46,16 @@ def normalize_promise_date(raw: str) -> Optional[str]:
 
 def run() -> int:
     """
-    Backfill promise_date for all dispatches:
+    Backfill compromise_date for all dispatches:
 
       - Reads tag 'FECSOLDES' from tags
       - If valid (YYYYMMDD), sets:
-          promise_date_raw = FECSOLDES
-          promise_date     = YYYY-MM-DD
-      - Only touches docs where promise_date does NOT exist.
+          compromise_date_raw = FECSOLDES
+          compromise_date     = YYYY-MM-DD
+      - Only touches docs where compromise_date does NOT exist.
     """
     logger.info(
-        "Starting job: backfill_promise_date_from_tags "
+        "Starting job: backfill_compromise_date_from_tags "
         "on %s.%s",
         MONGO_DB_NAME,
         MONGO_COLLECTION,
@@ -64,10 +64,10 @@ def run() -> int:
     mongo = MongoClient(MONGO_URI)
     col = mongo[MONGO_DB_NAME][MONGO_COLLECTION]
 
-    # Only docs lacking promise_date
+    # Only docs lacking compromise_date
     docs = col.find(
         {
-            "promise_date": {"$exists": False},
+            "compromise_date": {"$exists": False},
         },
         {
             "_id": 1,
@@ -85,13 +85,13 @@ def run() -> int:
         tags = doc.get("tags", [])
 
         raw_fecsoldes = extract_fecsoldes(tags)
-        promise_date = normalize_promise_date(raw_fecsoldes)
+        compromise_date = normalize_compromise_date(raw_fecsoldes)
 
         if raw_fecsoldes is None:
             logger.info("%s: FECSOLDES not found → skipped", _id)
             continue
 
-        if promise_date is None:
+        if compromise_date is None:
             logger.info(
                 "%s: FECSOLDES invalid format '%s' → skipped",
                 _id,
@@ -103,8 +103,8 @@ def run() -> int:
             {"_id": _id},
             {
                 "$set": {
-                    "promise_date_raw": raw_fecsoldes,
-                    "promise_date": promise_date,
+                    "compromise_date_raw": raw_fecsoldes,
+                    "compromise_date": compromise_date,
                 }
             },
         )
@@ -113,14 +113,14 @@ def run() -> int:
             "Updated %s: FECSOLDES=%s → %s",
             _id,
             raw_fecsoldes,
-            promise_date,
+            compromise_date,
         )
         updated += 1
 
     mongo.close()
 
     logger.info(
-        "Finished backfill_promise_date_from_tags. "
+        "Finished backfill_compromise_date_from_tags. "
         "Scanned: %d docs — Updated: %d docs.",
         count,
         updated,

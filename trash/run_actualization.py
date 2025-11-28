@@ -288,9 +288,9 @@ def run(delta_time_update: int = 0, delta_day: int = 0) -> None:
                 extra_args=["--route-key", str(route_key)],
             )
 
-            # 4) backfill promise_date from tags (for this route)
+            # 4) backfill compromise_date from tags (for this route)
             _run_job(
-                "orchestrator.jobs.backfill_promise_date_from_tags",
+                "orchestrator.jobs.backfill_compromise_date_from_tags",
                 extra_args=["--route-key", str(route_key)],
             )
 

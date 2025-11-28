@@ -14,7 +14,7 @@ JOBS_WITH_DATE = [
 
 JOBS_NO_DATE = [
     "orchestrator.jobs.backfill_tipo_orden_from_tags",
-    "orchestrator.jobs.backfill_promise_date_from_tags",
+    "orchestrator.jobs.backfill_compromise_date_from_tags",
     "orchestrator.jobs.get_ct",
     "orchestrator.jobs.get_substatus",
 ]

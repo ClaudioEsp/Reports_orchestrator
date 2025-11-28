@@ -13,7 +13,7 @@ def main():
     # List of commands to run in sequence
     commands = [
         "python fetch_dispatches.py",
-        "python -m backfill_promise_date_from_tags",
+        "python -m backfill_compromise_date_from_tags",
         "python -m backfill_tipo_orden_from_tags",
         "python -m backfill_ct",
         "python -m backfill_substatus"

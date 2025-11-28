@@ -1,4 +1,4 @@
-# orchestrator/jobs/backfill_promise_date_from_tags.py
+# orchestrator/jobs/backfill_compromise_date_from_tags.py
 
 import os
 import logging
@@ -6,7 +6,7 @@ from typing import List, Optional
 
 from pymongo import MongoClient
 
-logger = logging.getLogger("job.backfill_promise_date_from_tags")
+logger = logging.getLogger("job.backfill_compromise_date_from_tags")
 logger.setLevel(logging.INFO)
 logging.basicConfig(level=logging.INFO)
 
@@ -31,7 +31,7 @@ def extract_fecsoldes(tags: List[dict]) -> Optional[str]:
     return None
 
 
-def normalize_promise_date(raw: str) -> Optional[str]:
+def normalize_compromise_date(raw: str) -> Optional[str]:
     """
     Convert YYYYMMDD → YYYY-MM-DD.
     Return None if format invalid.
@@ -48,17 +48,17 @@ def normalize_promise_date(raw: str) -> Optional[str]:
 
 def run(route_key: str) -> int:
     """
-    Backfill promise_date for dispatches of a specific route (route_key):
+    Backfill compromise_date for dispatches of a specific route (route_key):
 
       - Reads tag 'FECSOLDES' from dispatch_raw.tags
       - If valid (YYYYMMDD), sets:
-          promise_date_raw = FECSOLDES
-          promise_date     = YYYY-MM-DD
+          compromise_date_raw = FECSOLDES
+          compromise_date     = YYYY-MM-DD
       - Only touches docs where:
-          route_key == route_key AND promise_date does NOT exist.
+          route_key == route_key AND compromise_date does NOT exist.
     """
     logger.info(
-        "Starting job: backfill_promise_date_from_tags "
+        "Starting job: backfill_compromise_date_from_tags "
         "for route_key=%s on %s.%s",
         route_key,
         MONGO_DB_NAME,
@@ -68,11 +68,11 @@ def run(route_key: str) -> int:
     mongo = MongoClient(MONGO_URI)
     col = mongo[MONGO_DB_NAME][MONGO_COLLECTION]
 
-    # Only docs for this route_key lacking promise_date
+    # Only docs for this route_key lacking compromise_date
     docs = col.find(
         {
             "route_key": route_key,
-            "promise_date": {"$exists": False},
+            "compromise_date": {"$exists": False},
         },
         {
             "_id": 1,
@@ -90,13 +90,13 @@ def run(route_key: str) -> int:
         tags = doc.get("dispatch_raw", {}).get("tags", [])
 
         raw_fecsoldes = extract_fecsoldes(tags)
-        promise_date = normalize_promise_date(raw_fecsoldes)
+        compromise_date = normalize_compromise_date(raw_fecsoldes)
 
         if raw_fecsoldes is None:
             logger.info("%s: FECSOLDES not found → skipped", _id)
             continue
 
-        if promise_date is None:
+        if compromise_date is None:
             logger.info(
                 "%s: FECSOLDES invalid format '%s' → skipped",
                 _id,
@@ -108,8 +108,8 @@ def run(route_key: str) -> int:
             {"_id": _id},
             {
                 "$set": {
-                    "promise_date_raw": raw_fecsoldes,
-                    "promise_date": promise_date,
+                    "compromise_date_raw": raw_fecsoldes,
+                    "compromise_date": compromise_date,
                 }
             },
         )
@@ -118,14 +118,14 @@ def run(route_key: str) -> int:
             "Updated %s: FECSOLDES=%s → %s",
             _id,
             raw_fecsoldes,
-            promise_date,
+            compromise_date,
         )
         updated += 1
 
     mongo.close()
 
     logger.info(
-        "Finished backfill_promise_date_from_tags for route_key=%s. "
+        "Finished backfill_compromise_date_from_tags for route_key=%s. "
         "Scanned: %d docs — Updated: %d docs.",
         route_key,
         count,
@@ -138,7 +138,7 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Backfill promise_date from FECSOLDES tag for dispatches of a route."
+        description="Backfill compromise_date from FECSOLDES tag for dispatches of a route."
     )
     parser.add_argument(
         "--route-key",
