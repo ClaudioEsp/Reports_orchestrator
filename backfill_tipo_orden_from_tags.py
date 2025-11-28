@@ -1,6 +1,7 @@
 import os
 import logging
 from typing import List, Optional
+from datetime import datetime, timedelta, timezone  # <-- NUEVO
 
 from pymongo import MongoClient
 
@@ -10,13 +11,16 @@ logging.basicConfig(level=logging.INFO)
 
 # Mongo env
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
-MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "dispatchtrack")
-MONGO_COLLECTION = os.getenv("MONGO_COLLECTION", "dispatches")
+MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "FRONTERA")
+MONGO_COLLECTION = os.getenv("DISPATCHES_COLLECTION", "DISPATCHES")
+
+# Ventana de horas para considerar "recientes"
+SYNC_WINDOW_HOURS = int(os.getenv("SYNC_WINDOW_HOURS", "6"))  # por defecto, últimas 6 horas
 
 
 def extract_tipo_orden(tags: List[dict]) -> Optional[str]:
     """
-    Given the tags array inside dispatch_raw, return TIPO_ORDEN value
+    Given the tags array inside dispatch document, return TIPO_ORDEN value
     or None if not found.
     """
     if not isinstance(tags, list):
@@ -31,30 +35,40 @@ def extract_tipo_orden(tags: List[dict]) -> Optional[str]:
 
 def run() -> int:
     """
-    Backfill tipo_orden for all dispatches:
+    Backfill tipo_orden ONLY for recent dispatches:
 
+      - Docs where:
+          * tipo_orden does NOT exist
+          * AND sync_timestamp is within the last SYNC_WINDOW_HOURS
       - Reads tag 'TIPO_ORDEN' from tags
-      - Sets tipo_orden if valid
-      - Only touches docs where tipo_orden does NOT exist.
+      - Sets tipo_orden if found
     """
     logger.info(
-        "Starting job: backfill_tipo_orden_from_tags "
-        "on %s.%s",
+        "Starting job: backfill_tipo_orden_from_tags (recent only) "
+        "on %s.%s (window: last %d hours)",
         MONGO_DB_NAME,
         MONGO_COLLECTION,
+        SYNC_WINDOW_HOURS,
     )
 
     mongo = MongoClient(MONGO_URI)
     col = mongo[MONGO_DB_NAME][MONGO_COLLECTION]
 
-    # Only docs lacking tipo_orden
+    # Umbral para considerar "reciente"
+    now_utc = datetime.now(timezone.utc)
+    threshold_dt = now_utc - timedelta(hours=SYNC_WINDOW_HOURS)
+    threshold_iso = threshold_dt.isoformat()
+
+    # Only docs lacking tipo_orden AND with recent sync_timestamp
     docs = col.find(
         {
             "tipo_orden": {"$exists": False},
+            "sync_timestamp": {"$gte": threshold_iso},
         },
         {
             "_id": 1,
             "tags": 1,
+            "sync_timestamp": 1,
         },
     )
 
@@ -83,16 +97,17 @@ def run() -> int:
         )
 
         logger.info(
-            "Updated %s: TIPO_ORDEN=%s",
+            "Updated %s: TIPO_ORDEN=%s (sync_timestamp=%s)",
             _id,
             tipo_orden_value,
+            doc.get("sync_timestamp"),
         )
         updated += 1
 
     mongo.close()
 
     logger.info(
-        "Finished backfill_tipo_orden_from_tags. "
+        "Finished backfill_tipo_orden_from_tags (recent only). "
         "Scanned: %d docs — Updated: %d docs.",
         count,
         updated,

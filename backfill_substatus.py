@@ -2,6 +2,7 @@ import os
 import logging
 import math
 from typing import Any, Dict, Optional, Set
+from datetime import datetime, timedelta, timezone  # <-- NUEVO
 
 from pymongo import MongoClient
 from dotenv import load_dotenv
@@ -13,12 +14,12 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("job.get_substatus")
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
+DATABASE = os.getenv("DATABASE", "FRONTERA")
+DISPATCHES_COLLECTION = os.getenv("DISPATCHES_COLLECTION", "DISPATCHES")
+SUB_STATUS_COLLECTION = os.getenv("SUB_STATUS_COLLECTION", "SUB_STATUS")
 
-DISPATCHTRACK_DB = os.getenv("DISPATCHTRACK_DB", "dispatchtrack")
-DISPATCHES_COLLECTION = os.getenv("DISPATCHES_COLLECTION", "dispatches")
-
-SUB_STATUS_DATABASE = os.getenv("SUB_STATUS_DATABASE", "substatus_db")
-SUB_STATUS_COLLECTION = os.getenv("SUB_STATUS_COLLECTION", "substatus_collection")
+# Ventana de horas para considerar "recientes"
+SYNC_WINDOW_HOURS = int(os.getenv("SYNC_WINDOW_HOURS", "6"))  # p.ej. últimas 6 horas
 
 
 def _is_bad_number(value: Any) -> bool:
@@ -127,89 +128,110 @@ def _extract_codcomu_value(disp_doc: Dict[str, Any]) -> Optional[str]:
 
 def run() -> None:
     """
-    Process all dispatches in the database:
-
-    - If substatus_code is null/empty/invalid:
-         set estado_beetrack = null,
-             estado_guia     = null,
-             cierre          = null
-
-    - If substatus_code is valid:
-         look for SUB_STATUS_COLLECTION["Código Sub"] == substatus_code
-         and set:
-             estado_beetrack = "Estado Beetrack"
-             estado_guia     = "Estado Guía"
-             cierre          = "Cierre"
-
-    Only substatus_code is used to decide what to write.
+    Process ONLY recent dispatches (sync_timestamp within last SYNC_WINDOW_HOURS),
+    in batches so that cursors never live too long.
     """
     logger.info(
-        "Starting get_substatus (pure mapping from substatus_code) for full database"
-        "dispatch_db=%s, substatus_db=%s.%s",
-        DISPATCHTRACK_DB,
-        SUB_STATUS_DATABASE,
+        "Starting get_substatus (pure mapping from substatus_code) for recent dispatches "
+        "dispatch_db=%s, substatus_db=%s.%s, window=%d hours",
+        DATABASE,
+        DATABASE,
         SUB_STATUS_COLLECTION,
+        SYNC_WINDOW_HOURS,
     )
 
     client = MongoClient(MONGO_URI)
-    disp_col = client[DISPATCHTRACK_DB][DISPATCHES_COLLECTION]
-    sub_col = client[SUB_STATUS_DATABASE][SUB_STATUS_COLLECTION]
+    disp_col = client[DATABASE][DISPATCHES_COLLECTION]
+    sub_col = client[DATABASE][SUB_STATUS_COLLECTION]
 
-    # Process all dispatches in the collection
-    cursor = disp_col.find()
+    # Umbral de tiempo para considerar "reciente"
+    now_utc = datetime.now(timezone.utc)
+    threshold_dt = now_utc - timedelta(hours=SYNC_WINDOW_HOURS)
+    threshold_iso = threshold_dt.isoformat()
+
+    BATCH_SIZE = 1000  # ajusta si quieres
+    last_id = None
 
     total = 0
     null_or_invalid_code = 0
     mapped = 0
     unmatched = 0
 
-    for disp in cursor:
-        total += 1
-        code = disp.get("substatus_code", None)
-        norm = _normalize_code(code)
-
-        # Case 1: no usable code -> force estados to null
-        if norm is None:
-            update_fields = {
-                "estado_beetrack": None,
-                "estado_guia": None,
-                "cierre": None,
+    try:
+        while True:
+            # Base query: solo recientes
+            query: Dict[str, Any] = {
+                "sync_timestamp": {"$gte": threshold_iso},
             }
-            disp_col.update_one({"_id": disp["_id"]}, {"$set": update_fields})
-            null_or_invalid_code += 1
-            continue
+            # Y vamos avanzando por _id para evitar cursores largos
+            if last_id is not None:
+                query["_id"] = {"$gt": last_id}
 
-        # Case 2: valid code -> lookup in substatus collection
-        mapping = _lookup_substatus(sub_col, code)
+            cursor = (
+                disp_col.find(query)
+                .sort("_id", 1)
+                .limit(BATCH_SIZE)
+            )
 
-        if mapping:
-            update_fields = {
-                "estado_beetrack": mapping.get("Estado Beetrack"),
-                "estado_guia": mapping.get("Estado Guía"),
-                "cierre": mapping.get("Cierre"),
-            }
-            mapped += 1
-        else:
-            # If there is a code but no mapping, we still want to avoid old wrong values
-            update_fields = {
-                "estado_beetrack": None,
-                "estado_guia": None,
-                "cierre": None,
-            }
-            unmatched += 1
-            if unmatched <= 5:
-                logger.warning(
-                    "No substatus mapping for substatus_code=%r (dispatch_id=%s)",
-                    code,
-                    disp.get("_id"),
-                )
+            docs = list(cursor)
+            if not docs:
+                break  # no quedan más documentos recientes
 
-        disp_col.update_one({"_id": disp["_id"]}, {"$set": update_fields})
+            for disp in docs:
+                last_id = disp["_id"]
+                total += 1
 
-    client.close()
+                code = disp.get("substatus_code", None)
+                norm = _normalize_code(code)
+
+                # Case 1: no usable code -> force estados to null
+                if norm is None:
+                    update_fields = {
+                        "estado_beetrack": None,
+                        "estado_guia": None,
+                        "cierre": None,
+                    }
+                    disp_col.update_one({"_id": disp["_id"]}, {"$set": update_fields})
+                    null_or_invalid_code += 1
+                    continue
+
+                # Case 2: valid code -> lookup in substatus collection
+                mapping = _lookup_substatus(sub_col, code)
+
+                if mapping:
+                    update_fields = {
+                        "estado_beetrack": mapping.get("Estado Beetrack"),
+                        "estado_guia": mapping.get("Estado Guía"),
+                        "cierre": mapping.get("Cierre"),
+                    }
+                    mapped += 1
+                else:
+                    update_fields = {
+                        "estado_beetrack": None,
+                        "estado_guia": None,
+                        "cierre": None,
+                    }
+                    unmatched += 1
+                    if unmatched <= 5:
+                        logger.warning(
+                            "No substatus mapping for substatus_code=%r (dispatch_id=%s)",
+                            code,
+                            disp.get("_id"),
+                        )
+
+                disp_col.update_one({"_id": disp["_id"]}, {"$set": update_fields})
+
+            logger.info(
+                "Processed so far (recent only): %d documents (last_id=%s)",
+                total,
+                last_id,
+            )
+
+    finally:
+        client.close()
 
     logger.info(
-        "get_substatus finished. "
+        "get_substatus finished (recent only). "
         "Processed=%d  Mapped=%d  Null_or_invalid_code=%d  Unmatched_with_code=%d",
         total,
         mapped,

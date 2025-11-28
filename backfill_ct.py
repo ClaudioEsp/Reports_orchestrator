@@ -1,6 +1,7 @@
 import os
 import logging
 from typing import Any, Dict, Optional
+from datetime import datetime, timedelta, timezone  # <-- NUEVO
 
 from pymongo import MongoClient
 from dotenv import load_dotenv
@@ -14,11 +15,13 @@ logging.basicConfig(level=logging.INFO)
 
 # MongoDB connection and configuration
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
-DISPATCHTRACK_DB = os.getenv("DISPATCHTRACK_DB", "dispatchtrack")
-DISPATCHES_COLLECTION = os.getenv("DISPATCHES_COLLECTION", "dispatches")
+DATABASE = os.getenv("MONGO_DB_NAME", "FRONTERA")
+DISPATCHES_COLLECTION = os.getenv("DISPATCHES_COLLECTION", "DISPATCHES")
+CT_COLLECTION = os.getenv("CT_COLLECTION", "CTS")
 
-CT_DATABASE = os.getenv("CT_DATABASE", "ct_db")
-CT_COLLECTION = os.getenv("CT_COLLECTION", "ct_collection")
+# Ventana de horas para considerar "recientes"
+SYNC_WINDOW_HOURS = int(os.getenv("SYNC_WINDOW_HOURS", "6"))  # p.ej. últimas 6 horas
+
 
 # Extract CODCOMU tag value from tags field
 def _extract_codcomu_value(disp_doc: Dict[str, Any]) -> Optional[str]:
@@ -47,37 +50,47 @@ def _extract_codcomu_value(disp_doc: Dict[str, Any]) -> Optional[str]:
 
     return None
 
+
 # Main function to update CT values for dispatches
 def run() -> None:
     """
-    Match CT for all dispatches missing `ct`:
+    Match CT for recent dispatches missing `ct`:
 
+       - Only dispatches:
+           * ct is None or does not exist
+           * AND sync_timestamp within the last SYNC_WINDOW_HOURS
+       
        - tags[*].name == "CODCOMU"
            → extract tag.value = external_id
        - external_id matches CT_DB["Id Externo"]
        - dispatch.ct = CT_DB["CT CORRESPONDE"]
-       
-    Updates all dispatches in the collection with the missing CT values.
     """
     logger.info(
-        "Starting get_ct: dispatch_db=%s, ct_db=%s.%s",
-        DISPATCHTRACK_DB,
-        CT_DATABASE,
+        "Starting get_ct (recent only): dispatch_db=%s, ct_db=%s.%s, window=%d hours",
+        DATABASE,
+        DATABASE,
         CT_COLLECTION,
+        SYNC_WINDOW_HOURS,
     )
 
     client = MongoClient(MONGO_URI)
 
-    disp_col = client[DISPATCHTRACK_DB][DISPATCHES_COLLECTION]
-    ct_col = client[CT_DATABASE][CT_COLLECTION]
+    disp_col = client[DATABASE][DISPATCHES_COLLECTION]
+    ct_col = client[DATABASE][CT_COLLECTION]
 
-    # Dispatches missing CT
+    # Umbral de tiempo para considerar "reciente"
+    now_utc = datetime.now(timezone.utc)
+    threshold_dt = now_utc - timedelta(hours=SYNC_WINDOW_HOURS)
+    threshold_iso = threshold_dt.isoformat()
+
+    # Dispatches missing CT AND with recent sync_timestamp
     cursor = disp_col.find(
         {
             "$or": [
                 {"ct": None},
                 {"ct": {"$exists": False}},
             ],
+            "sync_timestamp": {"$gte": threshold_iso},
         }
     )
 
@@ -129,6 +142,7 @@ def run() -> None:
         no_codcomu,
         not_found,
     )
+
 
 # Run the function
 if __name__ == "__main__":

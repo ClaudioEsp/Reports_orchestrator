@@ -1,6 +1,7 @@
 import os
 import logging
 from typing import List, Optional
+from datetime import datetime, timedelta, timezone  # <-- NUEVO
 
 from pymongo import MongoClient
 
@@ -10,8 +11,11 @@ logging.basicConfig(level=logging.INFO)
 
 # Mongo env
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
-MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "dispatchtrack")
-MONGO_COLLECTION = os.getenv("MONGO_COLLECTION", "dispatches")
+MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "FRONTERA")
+MONGO_COLLECTION = os.getenv("DISPATCHES_COLLECTION", "DISPATCHES")
+
+# Ventana de horas para considerar "recientes"
+SYNC_WINDOW_HOURS = int(os.getenv("SYNC_WINDOW_HOURS", "6"))  # p.ej. últimas 6 horas
 
 
 def extract_fecsoldes(tags: List[dict]) -> Optional[str]:
@@ -46,32 +50,43 @@ def normalize_compromise_date(raw: str) -> Optional[str]:
 
 def run() -> int:
     """
-    Backfill compromise_date for all dispatches:
+    Backfill compromise_date ONLY for recent dispatches:
 
-      - Reads tag 'FECSOLDES' from tags
-      - If valid (YYYYMMDD), sets:
-          compromise_date_raw = FECSOLDES
-          compromise_date     = YYYY-MM-DD
-      - Only touches docs where compromise_date does NOT exist.
+      - Docs without compromise_date
+      - AND sync_timestamp dentro de las últimas SYNC_WINDOW_HOURS horas
+
+      Lee tag 'FECSOLDES' de tags:
+        compromise_date_raw = FECSOLDES
+        compromise_date     = YYYY-MM-DD
     """
     logger.info(
         "Starting job: backfill_compromise_date_from_tags "
-        "on %s.%s",
+        "on %s.%s (window: last %d hours)",
         MONGO_DB_NAME,
         MONGO_COLLECTION,
+        SYNC_WINDOW_HOURS,
     )
 
     mongo = MongoClient(MONGO_URI)
     col = mongo[MONGO_DB_NAME][MONGO_COLLECTION]
 
-    # Only docs lacking compromise_date
+    # Umbral de tiempo para considerar "reciente"
+    now_utc = datetime.now(timezone.utc)
+    threshold_dt = now_utc - timedelta(hours=SYNC_WINDOW_HOURS)
+    threshold_iso = threshold_dt.isoformat()
+
+    # Solo docs:
+    #  - sin compromise_date
+    #  - con sync_timestamp reciente (>= threshold_iso)
     docs = col.find(
         {
             "compromise_date": {"$exists": False},
+            "sync_timestamp": {"$gte": threshold_iso},
         },
         {
             "_id": 1,
             "tags": 1,
+            "sync_timestamp": 1,
         },
     )
 
@@ -110,10 +125,11 @@ def run() -> int:
         )
 
         logger.info(
-            "Updated %s: FECSOLDES=%s → %s",
+            "Updated %s: FECSOLDES=%s → %s (sync_timestamp=%s)",
             _id,
             raw_fecsoldes,
             compromise_date,
+            doc.get("sync_timestamp"),
         )
         updated += 1
 

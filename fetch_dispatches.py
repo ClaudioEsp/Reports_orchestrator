@@ -3,6 +3,7 @@ import logging
 import requests
 from dotenv import load_dotenv
 from pymongo import MongoClient
+from datetime import datetime, timezone  # <-- NUEVO
 
 # Load environment variables from one directory above the current directory
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '..', '.env'))
@@ -20,12 +21,12 @@ if not X_AUTH_TOKEN:
 
 # MongoDB connection
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
-DISPATCHTRACK_DB = os.getenv("DISPATCHTRACK_DB", "dispatchtrack")
-DISPATCHES_COLLECTION = os.getenv("DISPATCHES_COLLECTION", "dispatches")
+DATABASE = os.getenv("DATABASE", "FRONTERA")
+DISPATCHES_COLLECTION = os.getenv("DISPATCHES_COLLECTION", "DISPATCHES")
 
 # MongoDB client setup
 client = MongoClient(MONGO_URI)
-db = client[DISPATCHTRACK_DB]
+db = client[DATABASE]
 dispatches_col = db[DISPATCHES_COLLECTION]
 
 # Fetch dispatches by date range with pagination
@@ -58,9 +59,12 @@ def fetch_dispatches_by_dates(start_date: str, end_date: str):
 
             logger.info(f"Successfully fetched {len(response_dispatches)} dispatches for dates {start_date} to {end_date}, page={page}.")
 
+            # Mismo timestamp para todos los despachos de ESTA llamada/página
+            sync_time = datetime.now(timezone.utc)
+
             # Save each dispatch immediately after fetching it
             for dispatch in response_dispatches:
-                save_dispatch_to_mongo(dispatch)  # Save to MongoDB as soon as the dispatch is fetched
+                save_dispatch_to_mongo(dispatch, sync_time)  # <-- pasamos sync_time
 
             page += 1  # Move to the next page
         else:
@@ -69,20 +73,14 @@ def fetch_dispatches_by_dates(start_date: str, end_date: str):
 
 
 # Save dispatch to MongoDB
-def save_dispatch_to_mongo(dispatch: dict):
+def save_dispatch_to_mongo(dispatch: dict, sync_time: datetime):
     """
     Save or update the dispatch in MongoDB.
+    sync_time = momento en que se sincronizó este despacho (última vez).
     """
     dispatch_id = dispatch.get("identifier")
 
-    # Check if the dispatch already exists in the database
-    existing_dispatch = dispatches_col.find_one({"identifier": dispatch_id})
-    
-    if existing_dispatch:
-        logger.info(f"Dispatch {dispatch_id} already exists in the database. Skipping update.")
-        return  # Skip this dispatch if it already exists
-
-    # Create the document to save (add the dispatch_raw data and other relevant fields)
+    # Documento que guardaremos / actualizaremos
     dispatch_doc = {
         "dispatch_id": dispatch.get("dispatch_id"),
         "identifier": dispatch.get("identifier"),
@@ -114,14 +112,17 @@ def save_dispatch_to_mongo(dispatch: dict):
         "to_be_payed": dispatch.get("to_be_payed"),
         "external_pincode": dispatch.get("external_pincode"),
         "items": dispatch.get("items"),
-        "last_refreshed_at": dispatch.get("last_refreshed_at")
+        "last_refreshed_at": dispatch.get("last_refreshed_at"),
+
+        # <-- NUEVO: cuándo se sincronizó este despacho por última vez
+        "sync_timestamp": sync_time.isoformat()
     }
 
-    # Insert the dispatch into MongoDB (this will add new ones or update existing ones)
+    # Actualizamos SIEMPRE (para que sync_timestamp se vaya refrescando)
     dispatches_col.update_one(
-        {"identifier": dispatch_id},  # Search by dispatch identifier
-        {"$set": dispatch_doc},       # Set the dispatch fields
-        upsert=True                    # If not found, insert a new document
+        {"identifier": dispatch_id},
+        {"$set": dispatch_doc},
+        upsert=True
     )
 
     logger.info(f"Dispatch {dispatch_id} saved/updated in MongoDB.")
@@ -129,7 +130,7 @@ def save_dispatch_to_mongo(dispatch: dict):
 
 # Example usage: fetching dispatches for a specific date range
 if __name__ == "__main__":
-    start_date = "2025-11-26"
+    start_date = "2025-11-27"
     end_date = "2025-11-27"
     
     fetch_dispatches_by_dates(start_date, end_date)
