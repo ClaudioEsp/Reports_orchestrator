@@ -92,12 +92,13 @@ def run() -> None:
             ],
             "sync_timestamp": {"$gte": threshold_iso},
         }
-    )
+    ).batch_size(100)  # Batch size for better performance
 
     total = 0
     updated = 0
     no_codcomu = 0
     not_found = 0
+    batch_counter = 0
 
     for disp in cursor:
         total += 1
@@ -132,6 +133,12 @@ def run() -> None:
         )
 
         updated += 1
+
+        # Track progress every 100 batches for logging purposes
+        batch_counter += 1
+        if batch_counter >= 100:
+            logger.info("Processed %d dispatches so far...", total)
+            batch_counter = 0
 
     client.close()
 

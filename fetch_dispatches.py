@@ -130,7 +130,7 @@ def save_dispatch_to_mongo(dispatch: dict, sync_time: datetime):
 
 # Example usage: fetching dispatches for a specific date range
 if __name__ == "__main__":
-    start_date = "2025-11-27"
-    end_date = "2025-11-27"
+    start_date = "2025-12-01"
+    end_date = "2025-12-01"
     
     fetch_dispatches_by_dates(start_date, end_date)
