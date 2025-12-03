@@ -18,10 +18,10 @@ MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "FRONTERA")
 MONGO_COLLECTION = os.getenv("DISPATCHES_COLLECTION", "DISPATCHES")
 
 # Ventana de horas para considerar "recientes"
-SYNC_WINDOW_HOURS = int(os.getenv("SYNC_WINDOW_HOURS", "6"))  # p.ej. últimas 6 horas
+SYNC_WINDOW_HOURS = int(os.getenv("SYNC_WINDOW_HOURS", "480"))  # p.ej. últimas 6 horas
 
 # Batch size for processing
-BATCH_SIZE = 100
+BATCH_SIZE = 1000
 
 def extract_fecsoldes(tags: List[dict]) -> Optional[str]:
     """
@@ -60,27 +60,27 @@ def process_batch(docs, col):
     """
     updated = 0
     for doc in docs:
-        _id = doc.get("_id")
+        identifier = doc.get("identifier")
         tags = doc.get("tags", [])
 
         raw_fecsoldes = extract_fecsoldes(tags)
         compromise_date = normalize_compromise_date(raw_fecsoldes)
 
         if raw_fecsoldes is None:
-            logger.info("%s: FECSOLDES not found → skipped", _id)
+            logger.info("%s: FECSOLDES not found → skipped", identifier)
             continue
 
         if compromise_date is None:
             logger.info(
                 "%s: FECSOLDES invalid format '%s' → skipped",
-                _id,
+                identifier,
                 raw_fecsoldes,
             )
             continue
 
         # Update document in MongoDB
         col.update_one(
-            {"_id": _id},
+            {"identifier": identifier},
             {
                 "$set": {
                     "compromise_date_raw": raw_fecsoldes,
@@ -91,7 +91,7 @@ def process_batch(docs, col):
 
         logger.info(
             "Updated %s: FECSOLDES=%s → %s (sync_timestamp=%s)",
-            _id,
+            identifier,
             raw_fecsoldes,
             compromise_date,
             doc.get("sync_timestamp"),
@@ -127,20 +127,29 @@ def run() -> int:
         "sync_timestamp": {"$gte": threshold_iso},
     }
 
-    # Initializing count and updated counters
     count = 0
     updated = 0
 
-    # Batch processing loop
-    while True:
-        # Get a batch of documents
-        docs = list(col.find(query, {"_id": 1, "tags": 1, "sync_timestamp": 1}).batch_size(BATCH_SIZE))
+    # Usar un cursor con batch_size para evitar el while True infinito
+    cursor = col.find(
+        query,
+        {"identifier": 1, "tags": 1, "sync_timestamp": 1},
+    ).batch_size(BATCH_SIZE)
 
-        if not docs:
-            break  # Exit loop if no more documents to process
+    buffer = []
 
-        count += len(docs)
-        updated += process_batch(docs, col)
+    for doc in cursor:
+        buffer.append(doc)
+        # Cuando juntamos un batch, lo procesamos
+        if len(buffer) >= BATCH_SIZE:
+            count += len(buffer)
+            updated += process_batch(buffer, col)
+            buffer = []
+
+    # Procesar el último batch si quedó algo
+    if buffer:
+        count += len(buffer)
+        updated += process_batch(buffer, col)
 
     mongo.close()
 
@@ -151,6 +160,7 @@ def run() -> int:
         updated,
     )
     return updated
+
 
 
 if __name__ == "__main__":

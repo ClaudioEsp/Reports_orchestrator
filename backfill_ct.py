@@ -20,7 +20,7 @@ DISPATCHES_COLLECTION = os.getenv("DISPATCHES_COLLECTION", "DISPATCHES")
 CT_COLLECTION = os.getenv("CT_COLLECTION", "CTS")
 
 # Ventana de horas para considerar "recientes"
-SYNC_WINDOW_HOURS = int(os.getenv("SYNC_WINDOW_HOURS", "6"))  # p.ej. últimas 6 horas
+SYNC_WINDOW_HOURS = int(os.getenv("SYNC_WINDOW_HOURS", "480"))  # p.ej. últimas 6 horas
 
 
 # Extract CODCOMU tag value from tags field

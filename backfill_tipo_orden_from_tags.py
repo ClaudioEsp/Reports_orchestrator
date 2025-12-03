@@ -19,7 +19,7 @@ MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "FRONTERA")
 MONGO_COLLECTION = os.getenv("DISPATCHES_COLLECTION", "DISPATCHES")
 
 # Ventana de horas para considerar "recientes"
-SYNC_WINDOW_HOURS = int(os.getenv("SYNC_WINDOW_HOURS", "6"))  # por defecto, últimas 6 horas
+SYNC_WINDOW_HOURS = int(os.getenv("SYNC_WINDOW_HOURS", "480"))  # por defecto, últimas 6 horas
 
 
 def extract_tipo_orden(tags: List[dict]) -> Optional[str]:

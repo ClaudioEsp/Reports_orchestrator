@@ -19,7 +19,7 @@ DISPATCHES_COLLECTION = os.getenv("DISPATCHES_COLLECTION", "DISPATCHES")
 SUB_STATUS_COLLECTION = os.getenv("SUB_STATUS_COLLECTION", "SUB_STATUS")
 
 # Ventana de horas para considerar "recientes"
-SYNC_WINDOW_HOURS = int(os.getenv("SYNC_WINDOW_HOURS", "6"))  # e.g. last 6 hours
+SYNC_WINDOW_HOURS = int(os.getenv("SYNC_WINDOW_HOURS", "480"))  # e.g. last 6 hours
 
 
 def _is_bad_number(value: Any) -> bool:
